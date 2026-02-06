@@ -282,5 +282,100 @@
                 </plugins>
             </build>
         </profile>
+        <profile>
+            <!-- Windows embedded (JNI) build profile.
+                 HawtJNI's BuildMojo takes the VS build path on Windows (CLI.IS_WINDOWS),
+                 which fails without .vcxproj files. This profile disables hawtjni:build
+                 and relies on MSYS2/MinGW for native compilation in CI.
+                 Usage: mvn compile -Pwindows-amd64 (generates C source only)
+                        then build DLL externally, then mvn package -Pwindows-amd64 -->
+            <id>windows-amd64</id>
+            <activation>
+                <os>
+                    <family>windows</family>
+                    <arch>amd64</arch>
+                </os>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.fusesource.hawtjni</groupId>
+                        <artifactId>hawtjni-maven-plugin</artifactId>
+                        <version>${hawtjni-version}</version>
+                        <executions>
+                            <!-- Disable the default execution (build/package-jar/package-source
+                                 all fail on Windows without VS project files) -->
+                            <execution>
+                                <id>default</id>
+                                <phase>none</phase>
+                            </execution>
+                            <!-- Only run generate to produce C source for external compilation -->
+                            <execution>
+                                <id>windows-generate</id>
+                                <phase>compile</phase>
+                                <goals>
+                                    <goal>generate</goal>
+                                </goals>
+                                <configuration>
+                                    <name>yara-wrapper</name>
+                                    <platform>windows64</platform>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-antrun-plugin</artifactId>
+                        <version>3.1.0</version>
+                        <executions>
+                            <!-- Override package-native: create platform JAR from pre-built DLL
+                                 (DLL must be placed at the expected path before running mvn package) -->
+                            <execution>
+                                <id>package-native</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>run</goal>
+                                </goals>
+                                <configuration>
+                                    <target>
+                                        <mkdir dir="${project.build.directory}/generated-sources/hawtjni/lib/META-INF/native/windows64"/>
+                                        <jar destfile="${project.build.directory}/${project.artifactId}-${project.version}-windows64.jar"
+                                             basedir="${project.build.directory}/generated-sources/hawtjni/lib/"
+                                             update="true"/>
+                                    </target>
+                                </configuration>
+                            </execution>
+                            <!-- Override test-native: no external binaries needed for embedded-only Windows build -->
+                            <execution>
+                                <id>test-native</id>
+                                <phase>compile</phase>
+                                <goals>
+                                    <goal>run</goal>
+                                </goals>
+                                <configuration>
+                                    <target>
+                                        <echo message="Windows embedded build: skipping external binary staging"/>
+                                    </target>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <!-- Exclude external (CLI-based) tests on Windows — they depend on
+                         POSIX file permissions and yara/yarac binaries not available here -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <version>3.0.0-M5</version>
+                        <configuration>
+                            <forkCount>1</forkCount>
+                            <reuseForks>false</reuseForks>
+                            <excludes>
+                                <exclude>**/external/**</exclude>
+                            </excludes>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
     </profiles>
 </project>
