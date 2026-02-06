@@ -173,8 +173,100 @@ jobs:
     outputs:
       mac-artifact: ${{ steps.build.outputs.maven-artifact }}
 
+  build_windows:
+    runs-on: windows-latest
+
+    strategy:
+      matrix:
+        jdk: [21]
+        libyara_tag: ["v4.5.2-subreption"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ matrix.jdk }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'oracle'
+          java-version: ${{ matrix.jdk }}
+          settings-path: ${{ github.workspace }}
+
+      - name: Set up MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            autoconf
+            automake
+            libtool
+            make
+            bison
+            flex
+            pkg-config
+
+      - name: Clone libyara (${{ matrix.libyara_tag }})
+        uses: actions/checkout@v4
+        with:
+          repository: subreption/yara
+          path: yara
+          ref: ${{ matrix.libyara_tag }}
+          token: ${{ secrets.GH_YARA_REPO_PAT }}
+
+      - name: Build libyara (${{ matrix.libyara_tag }})
+        shell: msys2 {0}
+        run: |
+          cd yara
+          ./bootstrap.sh
+          ./configure --without-crypto --enable-area --disable-shared CFLAGS=-fPIC
+          make
+          echo "YARA_HOME=$PWD" >> $GITHUB_ENV
+
+      - name: Maven compile (Java + JNI source generation)
+        run: mvn -B compile -Pwindows-amd64 --file pom.xml
+
+      - name: Build yara-wrapper.dll
+        shell: msys2 {0}
+        run: |
+          PROJECT_ROOT=$(pwd)
+          NATIVE_SRC="$PROJECT_ROOT/target/generated-sources/hawtjni/native-package"
+
+          cd "$NATIVE_SRC"
+          autoreconf -i
+          ./configure --with-jni-jdk="$JAVA_HOME" LIBS="-lws2_32"
+          make
+
+          DLL=$(find . -name "*.dll" -path "*/.libs/*" | head -1)
+          if [ -z "$DLL" ]; then
+              echo "ERROR: No DLL found after build"
+              find . -type f \( -name "*.dll" -o -name "*.so" -o -name "*.dylib" \) 2>/dev/null
+              exit 1
+          fi
+          echo "Built DLL: $DLL"
+
+          LIB_DIR="$PROJECT_ROOT/target/generated-sources/hawtjni/lib/META-INF/native/windows64"
+          TEST_DIR="$PROJECT_ROOT/target/test-classes/META-INF/native/windows64"
+          mkdir -p "$LIB_DIR" "$TEST_DIR"
+          cp "$DLL" "$LIB_DIR/yara-wrapper.dll"
+          cp "$DLL" "$TEST_DIR/yara-wrapper.dll"
+
+      - name: Build YARA-Java (Windows)
+        run: mvn -B package -Pwindows-amd64 --file pom.xml
+
+      - name: Upload windows64 build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows64-artifacts
+          path: target/*-windows64.jar
+          overwrite: true
+
+    outputs:
+      windows-artifact: ${{ steps.build.outputs.maven-artifact }}
+
   bundle:
-    needs: [build_linux, build_mac]
+    needs: [build_linux, build_mac, build_windows]
     runs-on: ubuntu-latest
 
     steps:
@@ -190,15 +282,22 @@ jobs:
           name: osx64-artifacts
           path: build/osx64
 
+      - name: Download Windows build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows64-artifacts
+          path: build/windows64
+
       - name: List current working directory
         run: ls -lhRt
 
-      # Step to bundle Linux and macOS JARs
+      # Step to bundle Linux, macOS, and Windows JARs
       - name: Bundle multiplatform JARs
         run: |
           mkdir -p bundled-jars
           cp build/linux64/*.jar bundled-jars/
           cp build/osx64/*.jar bundled-jars/
+          cp build/windows64/*.jar bundled-jars/
 
       - name: Upload bundled JARs
         uses: actions/upload-artifact@v4
