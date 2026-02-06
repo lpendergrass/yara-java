@@ -49,7 +49,7 @@ jobs:
           repository: subreption/yara
           path: yara
           ref: ${{ matrix.libyara_tag }}
-          token: ${{ secrets.GH_YARA_REPO_PAT }}
+          token: ${{ secrets.GH_YARA_REPO_PAT || github.token }}
 
       # Step 3: Build libyara under MSYS2 (same flags as Linux/macOS)
       - name: Build libyara (${{ matrix.libyara_tag }})

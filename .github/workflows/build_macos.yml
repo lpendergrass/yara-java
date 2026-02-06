@@ -48,7 +48,7 @@ jobs:
           repository: subreption/yara
           path: yara
           ref: ${{ matrix.libyara_tag }}
-          token: ${{ secrets.GH_YARA_REPO_PAT }}
+          token: ${{ secrets.GH_YARA_REPO_PAT || github.token }}
 
       # Step 3: Build libyara on macOS
       - name: Build libyara on macOS (${{ matrix.libyara_tag }})

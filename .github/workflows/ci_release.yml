@@ -36,7 +36,7 @@ jobs:
           repository: subreption/yara
           path: yara
           ref: ${{ matrix.libyara_tag }}
-          token: ${{ secrets.GH_YARA_REPO_PAT }}
+          token: ${{ secrets.GH_YARA_REPO_PAT || github.token }}
 
       # Step 3: Clone the YARA repository and build it
       - name: Build libyara (${{ matrix.libyara_tag }})
@@ -122,7 +122,7 @@ jobs:
           repository: subreption/yara
           path: yara
           ref: ${{ matrix.libyara_tag }}
-          token: ${{ secrets.GH_YARA_REPO_PAT }}
+          token: ${{ secrets.GH_YARA_REPO_PAT || github.token }}
 
       - name: List current working directory
         run: ls -lhRt
@@ -220,7 +220,7 @@ jobs:
           repository: subreption/yara
           path: yara
           ref: ${{ matrix.libyara_tag }}
-          token: ${{ secrets.GH_YARA_REPO_PAT }}
+          token: ${{ secrets.GH_YARA_REPO_PAT || github.token }}
 
       - name: Build libyara (${{ matrix.libyara_tag }})
         shell: msys2 {0}
