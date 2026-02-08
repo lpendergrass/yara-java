@@ -174,24 +174,40 @@ jobs:
           ref: ${{ matrix.libyara_tag }}
           token: ${{ secrets.GH_YARA_REPO_PAT }}
 
-      # Build libyara under MSYS2 (same flags as Linux/macOS)
+      # Build libyara under MSYS2
+      # Note: --enable-area is omitted on Windows because the area module uses
+      # Windows SEH (__try keyword) which MinGW GCC does not support.
       - name: Build libyara (${{ matrix.libyara_tag }})
         shell: msys2 {0}
         run: |
           cd yara
           ./bootstrap.sh
-          ./configure --without-crypto --enable-area --disable-shared CFLAGS=-fPIC
+          ./configure --without-crypto --disable-shared CFLAGS=-fPIC
           make
           echo "YARA_HOME=$PWD" >> $GITHUB_ENV
 
       # Maven compile: generates Java classes and JNI C source.
       # The windows-amd64 profile disables hawtjni:build (which would fail
       # looking for VS project files) and only runs hawtjni:generate.
+      # continue-on-error: the base antrun test-native execution may fire
+      # despite the profile override and fail copying yara/yarac binaries
+      # that don't exist on Windows. The C source is generated before this.
       - name: Maven compile (Java + JNI source generation)
         run: mvn -B compile -Pwindows-amd64 --file pom.xml
+        continue-on-error: true
+
+      - name: Verify JNI C source was generated
+        shell: msys2 {0}
+        run: |
+          test -f target/generated-sources/hawtjni/native-package/src/yara-wrapper.c
+          echo "JNI C source generation verified"
 
       # Build the JNI wrapper DLL using MSYS2/MinGW autotools.
       # custom.m4 reads YARA_HOME from the environment for include/lib paths.
+      # Key flags:
+      #   -DJNI64: Required on Windows x64 — HawtJNI's platform detection only
+      #            checks _LP64 (Unix) and misses _WIN64, causing 32-bit jintLong.
+      #   -no-undefined: Required by MinGW libtool for DLL shared library linking.
       - name: Build yara-wrapper.dll
         shell: msys2 {0}
         run: |
@@ -200,7 +216,11 @@ jobs:
 
           cd "$NATIVE_SRC"
           autoreconf -i
-          ./configure --with-jni-jdk="$JAVA_HOME" LIBS="-lws2_32"
+          ./configure --with-jni-jdk="$JAVA_HOME" LIBS="-lws2_32" CFLAGS="-DJNI64 -pipe"
+
+          # Add -no-undefined to LDFLAGS (required by MinGW libtool for DLL linking)
+          sed -i 's|^LDFLAGS = \(.*\) -release|LDFLAGS = \1 -no-undefined -release|' Makefile
+
           make
 
           # Find the built DLL (libtool places it in .libs/)
@@ -212,7 +232,7 @@ jobs:
           fi
           echo "Built DLL: $DLL"
 
-          # Place DLL where Maven antrun and tests expect it, renamed for HawtJNI runtime
+          # Place DLL where tests and JAR packaging expect it, renamed for HawtJNI runtime
           # (System.mapLibraryName("yara-wrapper") returns "yara-wrapper.dll" on Windows)
           LIB_DIR="$PROJECT_ROOT/target/generated-sources/hawtjni/lib/META-INF/native/windows64"
           TEST_DIR="$PROJECT_ROOT/target/test-classes/META-INF/native/windows64"
@@ -220,10 +240,16 @@ jobs:
           cp "$DLL" "$LIB_DIR/yara-wrapper.dll"
           cp "$DLL" "$TEST_DIR/yara-wrapper.dll"
 
-      # Run embedded tests and create the platform JAR.
-      # External tests are excluded by the windows-amd64 surefire configuration.
-      - name: Build YARA-Java (Windows)
-        run: mvn -B package -Pwindows-amd64 --file pom.xml
+      # Run embedded tests only (external tests excluded by windows-amd64 profile).
+      # Uses surefire:test to bypass the compile phase and its antrun plugin
+      # which may fail trying to copy yara/yarac binaries that don't exist.
+      - name: Run embedded tests
+        run: mvn -B surefire:test -Pwindows-amd64 --file pom.xml
+
+      # Create the platform JAR manually rather than via mvn package, which
+      # would re-trigger the compile phase antrun issue.
+      - name: Package windows64 JAR
+        run: jar cf target/libyara-4.5.2-SNAPSHOT-windows64.jar -C target/generated-sources/hawtjni/lib META-INF
 
       - name: Upload windows64 build artifacts
         uses: actions/upload-artifact@v4
